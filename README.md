@@ -55,6 +55,7 @@ macOS 上的 QQ 受到多层沙箱限制，安装器需要逐一突破：
 | **文件系统权限** | `/Applications/QQ.app/` 普通进程无法修改其内容 | 通过 `Process` 拉起 `sudo -S`，用户密码通过管道标准输入传递，临时获取与用户同级的 root 权限来修改 `package.json`。常规方法（如 `chmod` 提权、Authorization Services）无法直接修改其他应用的 bundle 内容 |
 | **Hardened Runtime** | QQ 的代码签名禁止加载未签名库/脚本 | 安装器启用 `disable-library-validation` 等 entitlement，允许加载 NapCat |
 | **Chromium Sandbox** | Electron 沙箱限制子进程行为 | NapCat 启动时传入 `--no-sandbox` 参数 |
+
 简单来说：**NapCat 文件放在 QQ 的沙箱容器内（QQ 能读到），但 QQ 的入口配置文件在 app bundle 内（需要 root 权限才能改），安装器借助 `sudo` 跨越这个权限鸿沟。**
 
 ### 什么是 `package.json`？
