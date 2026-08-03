@@ -89,6 +89,7 @@ let homeDir = NSHomeDirectory()
 let containerURL = URL(fileURLWithPath: "\(homeDir)/Library/Containers/com.tencent.qq/Data")
 let docURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
 let datURL = containerURL.appendingPathComponent("Library/Application Support/QQ/NapCat", isDirectory: true)
+let versionsURL = containerURL.appendingPathComponent("Library/Application Support/QQ/versions", isDirectory: true)
 private func getJSONObject(url: URL) throws -> [NSString: Any]? {
     guard FileManager.default.fileExists(atPath: url.path) else { return nil }
     let data = try Data(contentsOf: url)
@@ -496,27 +497,106 @@ private let loaderURL = docURL.appendingPathComponent("loadNapCat.js")
 
 private func createLoader() throws {
     let loaderContent = #"""
-    const hasNapcatParam = process.argv.includes('--no-sandbox');
+    const loadNapcat = process.argv.includes('--no-sandbox');
     const package = require('/Applications/QQ.app/Contents/Resources/app/package.json');
-    if (hasNapcatParam) {
+    if (loadNapcat) {
         (async () => {
             await import('file://\#(docURL.path)/napcat/napcat.mjs');
         })();
     } else {
         require('\#(appURL.path)/app_launcher/index.js');
         setImmediate(() => {
-            global.launcher.installPathPkgJson.main = ((version) => {
-                if (version >= 29271) return "./application.asar/app_launcher/index.js";
-                if (version >= 28060) return "./application/app_launcher/index.js";
-                return "./app_launcher/index.js";
-            })(package.buildVersion);
+            if (global.launcher && global.launcher.installPathPkgJson) {
+                global.launcher.installPathPkgJson.main = ((version) => {
+                    if (version >= 29271) return "./application.asar/app_launcher/index.js";
+                    if (version >= 28060) return "./application/app_launcher/index.js";
+                    return "./app_launcher/index.js";
+                })(package.buildVersion);
+            }
         });
     }
     """#
     try loaderContent.write(to: loaderURL, atomically: true, encoding: .utf8)
 }
 
-func getQQPackageBak() {
+private func relativePath(from sourceDir: URL, to targetFile: URL) -> String {
+    let src = sourceDir.pathComponents
+    let dst = targetFile.pathComponents
+    var i = 0
+    while i < src.count && i < dst.count && src[i] == dst[i] {
+        i += 1
+    }
+    var parts = Array(repeating: "..", count: src.count - i)
+    parts.append(contentsOf: dst[i...])
+    return parts.joined(separator: "/")
+}
+
+private func originalLoader(for buildVersion: String?) -> String {
+    guard let buildVersion, let version = Int(buildVersion) else {
+        return "./application.asar/app_launcher/index.js"
+    }
+    if version >= 29271 { return "./application.asar/app_launcher/index.js" }
+    if version >= 28060 { return "./application/app_launcher/index.js" }
+    return "./app_launcher/index.js"
+}
+
+private func hotUpdatePackageURLs() -> [URL] {
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: versionsURL.path),
+        let versionDirs = try? fileManager.contentsOfDirectory(atPath: versionsURL.path)
+    else { return [] }
+    return versionDirs.compactMap { dir in
+        let url = versionsURL.appendingPathComponent(dir)
+            .appendingPathComponent("QQUpdate.app/Contents/Resources/app/package.json")
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+}
+
+@discardableResult
+func patchHotUpdatePackages() throws -> Int {
+    var patched = 0
+    for pkgURL in hotUpdatePackageURLs() {
+        guard var dict = try getJSONObject(url: pkgURL), let main = dict["main"] as? String else { continue }
+        let appDir = pkgURL.deletingLastPathComponent()
+        let loaderPath = relativePath(from: appDir, to: loaderURL)
+        guard main != loaderPath else { continue }
+        dict["main"] = loaderPath
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .withoutEscapingSlashes])
+        try data.write(to: pkgURL)
+        patched += 1
+    }
+    return patched
+}
+
+@discardableResult
+func restoreHotUpdatePackages() throws -> Int {
+    var restored = 0
+    for pkgURL in hotUpdatePackageURLs() {
+        guard var dict = try getJSONObject(url: pkgURL),
+            let main = dict["main"] as? String,
+            main.contains("loadNapCat.js")
+        else { continue }
+        let original = originalLoader(for: dict["buildVersion"] as? String)
+        guard main != original else { continue }
+        dict["main"] = original
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .withoutEscapingSlashes])
+        try data.write(to: pkgURL)
+        restored += 1
+    }
+    return restored
+}
+
+private func permissionFixHint(for raw: String) -> String {
+    var message = raw
+    if message.localizedCaseInsensitiveContains("not permitted") {
+        message += "\n\n解决办法：请在「系统设置 → 隐私与安全性 → App 管理」中添加本程序（NapCat安装器），然后重新点击按钮重试。"
+        message += "\n如已添加仍失败，请先移除后重新添加，并完全退出本程序后重试。"
+    }
+    return message
+}
+
+@discardableResult
+func getQQPackageBak() -> Bool {
     let backupURL = URL(fileURLWithPath: packageURL.path + ".bak")
     guard FileManager.default.fileExists(atPath: backupURL.path) else {
         DispatchQueue.main.async {
@@ -527,7 +607,7 @@ func getQQPackageBak() {
             alert.addButton(withTitle: "确定")
             alert.runModal()
         }
-        return
+        return false
     }
     let alert = NSAlert()
     alert.messageText = "需要管理员权限"
@@ -540,7 +620,7 @@ func getQQPackageBak() {
     alert.accessoryView = textField
     let response = alert.runModal()
     guard response == .alertFirstButtonReturn else {
-        return
+        return false
     }
     let password = textField.stringValue
     guard !password.isEmpty else {
@@ -552,7 +632,7 @@ func getQQPackageBak() {
             alert.addButton(withTitle: "确定")
             alert.runModal()
         }
-        return
+        return false
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
@@ -574,9 +654,18 @@ func getQQPackageBak() {
         let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
         DispatchQueue.main.async {
             if process.terminationStatus == 0 {
+                var info = "package.json 已恢复为备份文件"
+                do {
+                    let restored = try restoreHotUpdatePackages()
+                    if restored > 0 {
+                        info += "，并已恢复 \(restored) 个 QQ 热更新包入口"
+                    }
+                } catch {
+                    info += "\n警告：QQ 热更新包入口恢复失败（\(error.localizedDescription)）"
+                }
                 let alert = NSAlert()
                 alert.messageText = "成功"
-                alert.informativeText = "package.json 已恢复为备份文件"
+                alert.informativeText = info
                 alert.alertStyle = .informational
                 alert.addButton(withTitle: "确定")
                 alert.runModal()
@@ -584,12 +673,13 @@ func getQQPackageBak() {
                 let msg = errorOutput.isEmpty ? output : errorOutput
                 let alert = NSAlert()
                 alert.messageText = "恢复失败"
-                alert.informativeText = "命令执行失败：\n\(msg)"
+                alert.informativeText = "命令执行失败：\n\(permissionFixHint(for: msg))"
                 alert.alertStyle = .warning
                 alert.addButton(withTitle: "确定")
                 alert.runModal()
             }
         }
+        return process.terminationStatus == 0
     } catch {
         DispatchQueue.main.async {
             let alert = NSAlert()
@@ -599,6 +689,7 @@ func getQQPackageBak() {
             alert.addButton(withTitle: "确定")
             alert.runModal()
         }
+        return false
     }
 }
 
@@ -669,7 +760,7 @@ func setQQPackageBak() throws {
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "备份失败"
-            alert.informativeText = "备份原文件失败：\n\(errorMsg)"
+            alert.informativeText = "备份原文件失败：\n\(permissionFixHint(for: errorMsg))"
             alert.alertStyle = .warning
             alert.addButton(withTitle: "确定")
             alert.runModal()
@@ -713,9 +804,18 @@ func setQQPackageBak() throws {
     let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
     DispatchQueue.main.async {
         if writeProcess.terminationStatus == 0 {
+            var info = "已备份原文件并直接写入修改后的 package.json"
+            do {
+                let patched = try patchHotUpdatePackages()
+                if patched > 0 {
+                    info += "，并已同步修改 \(patched) 个 QQ 热更新包入口"
+                }
+            } catch {
+                info += "\n警告：QQ 热更新包入口同步失败（\(error.localizedDescription)）"
+            }
             let alert = NSAlert()
             alert.messageText = "成功"
-            alert.informativeText = "已备份原文件并直接写入修改后的 package.json"
+            alert.informativeText = info
             alert.alertStyle = .informational
             alert.addButton(withTitle: "确定")
             alert.runModal()
@@ -723,7 +823,7 @@ func setQQPackageBak() throws {
             let msg = errorOutput.isEmpty ? output : errorOutput
             let alert = NSAlert()
             alert.messageText = "写入失败"
-            alert.informativeText = "写入新内容失败：\n\(msg)"
+            alert.informativeText = "写入新内容失败：\n\(permissionFixHint(for: msg))"
             alert.alertStyle = .warning
             alert.addButton(withTitle: "确定")
             alert.runModal()
