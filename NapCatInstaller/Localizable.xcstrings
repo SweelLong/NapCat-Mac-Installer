@@ -47,6 +47,19 @@
         }
       }
     },
+    " %@：未运行" : {
+
+    },
+    " %@：运行中（%@）" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : " %1$@：运行中（%2$@）"
+          }
+        }
+      }
+    },
     " NapCat" : {
       "localizations" : {
         "en" : {
@@ -117,6 +130,9 @@
         }
       }
     },
+    " 需要授权访问 QQ 数据目录" : {
+
+    },
     "🐧 启动 原版QQ" : {
       "localizations" : {
         "en" : {
@@ -127,6 +143,9 @@
         }
       }
     },
+    "🐧 显示 原版QQ" : {
+
+    },
     "🐱 启动 NapCat" : {
       "localizations" : {
         "en" : {
@@ -136,6 +155,9 @@
           }
         }
       }
+    },
+    "HTTP(S) 加速前缀，例如 https://mirror.example" : {
+
     },
     "NapCat 安装成功" : {
       "extractionState" : "stale",
@@ -190,7 +212,11 @@
         }
       }
     },
+    "下载线路" : {
+
+    },
     "代理" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -209,6 +235,15 @@
           }
         }
       }
+    },
+    "停止" : {
+
+    },
+    "停止 %@" : {
+
+    },
+    "允许安装器访问 QQ 数据目录，以读取和安装 NapCat" : {
+
     },
     "切换程序入口「 NapCat 」" : {
       "localizations" : {
@@ -271,6 +306,7 @@
       }
     },
     "启动" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -281,6 +317,7 @@
       }
     },
     "启动原版QQ" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -352,6 +389,7 @@
       }
     },
     "将恢复 QQ 原版程序入口并启动，需要输入开机密码。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -360,6 +398,12 @@
           }
         }
       }
+    },
+    "将正常退出 NapCat（PID %@），机器人会离线。原版 QQ 不受影响。" : {
+
+    },
+    "将正常退出原版 QQ（PID %@）。NapCat 不受影响。" : {
+
     },
     "打开 %@" : {
       "localizations" : {
@@ -380,6 +424,9 @@
           }
         }
       }
+    },
+    "授权访问" : {
+
     },
     "提示" : {
       "localizations" : {
@@ -411,6 +458,9 @@
           }
         }
       }
+    },
+    "无法授权" : {
+
     },
     "更新" : {
       "localizations" : {
@@ -444,6 +494,7 @@
       }
     },
     "注意：需要在“系统设置-隐私与安全性-App管理”中添加该程序！" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -452,6 +503,9 @@
           }
         }
       }
+    },
+    "确认停止" : {
+
     },
     "确认启动" : {
       "localizations" : {
@@ -473,6 +527,9 @@
         }
       }
     },
+    "网络代理和私有 CA 使用 macOS 的系统代理与证书信任设置。" : {
+
+    },
     "自动检测" : {
       "localizations" : {
         "en" : {
@@ -482,6 +539,9 @@
           }
         }
       }
+    },
+    "自定义加速地址" : {
+
     },
     "请先还原再卸载" : {
       "localizations" : {

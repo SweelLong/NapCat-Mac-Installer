@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		839782032CAD6E9300BF3455 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 839782022CAD6E9300BF3455 /* README.md */; };
-		83D4A8FE2CAD15D1007ECB3B /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 83D4A8FD2CAD15D1007ECB3B /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,7 +41,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				83D4A8FE2CAD15D1007ECB3B /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -85,9 +83,6 @@
 				837FAB572CAC480300FADBD1 /* NapCatInstaller */,
 			);
 			name = NapCatInstaller;
-			packageProductDependencies = (
-				83D4A8FD2CAD15D1007ECB3B /* ZIPFoundation */,
-			);
 			productName = NapCatInstaller;
 			productReference = 837FAB552CAC480300FADBD1 /* NapCatInstaller.app */;
 			productType = "com.apple.product-type.application";
@@ -117,9 +112,6 @@
 			);
 			mainGroup = 837FAB4C2CAC480300FADBD1;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				83D4A8FC2CAD15D1007ECB3B /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 837FAB562CAC480300FADBD1 /* Products */;
 			projectDirPath = "";
@@ -207,7 +199,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -268,7 +260,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -302,8 +294,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 1.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.hguandl.NapCatInstaller;
+				MARKETING_VERSION = 1.8;
+				PRODUCT_BUNDLE_IDENTIFIER = com.NapNeko.NapCatInstaller;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -334,8 +326,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 1.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.hguandl.NapCatInstaller;
+				MARKETING_VERSION = 1.8;
+				PRODUCT_BUNDLE_IDENTIFIER = com.NapNeko.NapCatInstaller;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -364,25 +356,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		83D4A8FC2CAD15D1007ECB3B /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.9.19;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		83D4A8FD2CAD15D1007ECB3B /* ZIPFoundation */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 83D4A8FC2CAD15D1007ECB3B /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
-			productName = ZIPFoundation;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 837FAB4D2CAC480300FADBD1 /* Project object */;
 }

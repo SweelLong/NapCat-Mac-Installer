@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import ZIPFoundation
 import CryptoKit
 
 struct LogEntry: Identifiable {
@@ -68,6 +67,7 @@ enum NapcatVersion: Equatable {
     case installed(String)
     case outdated(String, String)
     case latest(String)
+    case unauthorized(String)
     case failed(String)
 
     var installed: Bool {
@@ -78,6 +78,20 @@ enum NapcatVersion: Equatable {
             return false
         }
     }
+}
+
+/// macOS 会阻止未授权应用读取其他应用的沙盒容器（如 QQ 的 `~/Library/Containers/com.tencent.qq`）。
+func isPermissionDenied(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    if nsError.domain == NSCocoaErrorDomain,
+       [NSFileReadNoPermissionError, NSFileWriteNoPermissionError].contains(nsError.code) {
+        return true
+    }
+    if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+       underlying.domain == NSPOSIXErrorDomain, underlying.code == Int(EPERM) {
+        return true
+    }
+    return false
 }
 
 private let napcatURL = docURL.appendingPathComponent("napcat")
@@ -95,6 +109,25 @@ func getRemoteNapcat(proxy: GitHubProxy? = nil) async throws -> String {
 func removeNapcat() throws {
     try? FileManager.default.removeItem(at: loaderURL)
     try? FileManager.default.removeItem(at: napcatURL)
+}
+
+/// 使用 macOS 自带的 ditto 解压 zip，避免引入第三方解压库。
+private func unzip(_ archive: URL, to destination: URL) throws {
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+    process.arguments = ["-x", "-k", archive.path, destination.path]
+    let errorPipe = Pipe()
+    process.standardError = errorPipe
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        throw NSError(domain: "NapCatInstall", code: Int(process.terminationStatus),
+                      userInfo: [NSLocalizedDescriptionKey: message.isEmpty
+                          ? "解压失败（ditto 退出码 \(process.terminationStatus)）" : message])
+    }
 }
 
 func installNapcat(proxy: GitHubProxy? = nil, progress: InstallationProgress? = nil) async throws {
@@ -131,7 +164,7 @@ func installNapcat(proxy: GitHubProxy? = nil, progress: InstallationProgress? = 
     downloadProgress.updateProgress(0.85)
     downloadProgress.addLog("解压到临时目录...")
     do {
-        try fileManager.unzipItem(at: downloadLocation, to: extractedURL)
+        try unzip(downloadLocation, to: extractedURL)
     } catch {
         downloadProgress.addLog("解压失败: \(error.localizedDescription)")
         try? fileManager.removeItem(at: downloadLocation)
@@ -211,31 +244,6 @@ func getAppLoader() throws -> String? {
 
 let loaderURL = docURL.appendingPathComponent("loadNapCat.js")
 
-// 旧版加载器：原版分支固定加载基础包 QQ.app 的 app_launcher，QQ 热更新后（运行时换成 QQUpdate.app 的 Electron）
-// 会出现进程存在但没有任何窗口。仅用于识别，不再写入。
-let legacyLoaderContent = #"""
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-const loadNapcat = process.argv.includes('--no-sandbox');
-const package = require('/Applications/QQ.app/Contents/Resources/app/package.json');
-if (loadNapcat) {
-    (async () => {
-        await import(pathToFileURL(path.join(__dirname, 'napcat/napcat.mjs')).href);
-    })();
-} else {
-    require('\#(appURL.path)/app_launcher/index.js');
-    setImmediate(() => {
-        if (global.launcher && global.launcher.installPathPkgJson) {
-            global.launcher.installPathPkgJson.main = ((version) => {
-                if (version >= 29271) return "./application.asar/app_launcher/index.js";
-                if (version >= 28060) return "./application/app_launcher/index.js";
-                return "./app_launcher/index.js";
-            })(package.buildVersion);
-        }
-    });
-}
-"""#
-
 let loaderContent = #"""
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -293,17 +301,18 @@ if (loadNapcat) {
 enum LoaderStatus: Equatable {
     case missing
     case current
-    case legacy
+    case outdated
     case custom
 }
 
 func getLoaderStatus() -> LoaderStatus {
     guard let content = try? String(contentsOf: loaderURL, encoding: .utf8) else { return .missing }
-    switch content {
-    case loaderContent: return .current
-    case legacyLoaderContent: return .legacy
-    default: return .custom
+    if content == loaderContent { return .current }
+    // 旧版加载器固定加载基础包 app_launcher，QQ 热更新后会无窗口；识别后自动替换为默认加载器。
+    if content.contains("app_launcher/index.js") && !content.contains("QQNT.framework") {
+        return .outdated
     }
+    return .custom
 }
 
 /// 写入双开加载器。已是当前版本时不改动；内容为自定义时先备份到 loadNapCat.js.bak-<时间>，返回备份位置。
@@ -356,14 +365,7 @@ private func hotUpdatePackageURLs() -> [URL] {
     }
 }
 
-/// 尚未指向 loadNapCat.js 的热更新包数量。QQ 热更新生成新的 QQUpdate.app 后，NapCat 模式需要重新同步入口。
-func pendingHotUpdatePackages() -> Int {
-    hotUpdatePackageURLs().filter { pkgURL in
-        guard let dict = try? getJSONObject(url: pkgURL), let main = dict["main"] as? String else { return false }
-        return main != relativePath(from: pkgURL.deletingLastPathComponent(), to: loaderURL)
-    }.count
-}
-
+/// 将 QQ 热更新包的入口指向 loadNapCat.js，返回修改数量。
 @discardableResult
 func patchHotUpdatePackages() throws -> Int {
     var patched = 0

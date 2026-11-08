@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 struct ContentView: View {
@@ -9,6 +11,8 @@ struct ContentView: View {
     @State private var buttonClicked = false
     @State private var showLogs = false
     @State private var showPaths = false
+    @State private var accessErrorMessage = ""
+    @State private var showAccessError = false
     @StateObject private var installationProgress = InstallationProgress()
     
     private var proxy: GitHubProxy? {
@@ -47,6 +51,14 @@ struct ContentView: View {
                     buttonClicked.toggle()
                 } label: {
                     Label("刷新", systemImage: "arrow.clockwise.circle")
+                }
+                if case .unauthorized = napcatVersion {
+                    Button {
+                        requestDataAccess()
+                    } label: {
+                        Label("授权访问", systemImage: "lock.open")
+                    }
+                    .help("允许安装器访问 QQ 数据目录，以读取和安装 NapCat")
                 }
                 NapcatInstallationButton(version: napcatVersion, status: patchStatus, proxy: proxy, showLogs: $showLogs, progress: installationProgress) {
                     buttonClicked.toggle()
@@ -103,6 +115,11 @@ struct ContentView: View {
         .sheet(isPresented: $showPaths) {
             NapcatPathsView()
         }
+        .alert("无法授权", isPresented: $showAccessError) {
+            Button("好") {}
+        } message: {
+            Text(accessErrorMessage)
+        }
     }
     
     private func updateQQVersion() {
@@ -134,10 +151,41 @@ struct ContentView: View {
                 napcatVersion = .installed(local)
             }
         } catch {
-            napcatVersion = .failed(error.localizedDescription)
+            if isPermissionDenied(error) {
+                napcatVersion = .unauthorized(error.localizedDescription)
+            } else {
+                napcatVersion = .failed(error.localizedDescription)
+            }
         }
     }
-    
+
+    private func requestDataAccess() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = containerURL
+        panel.message = "已定位到 QQ 数据目录。点击“授权”即可允许安装器访问 NapCat 所需的文件。\n\(docURL.path)"
+        panel.prompt = "授权"
+        panel.begin { response in
+            guard response == .OK else { return }
+            guard let url = panel.url else {
+                accessErrorMessage = "没有选中文件夹。请先在面板中选中 Documents 文件夹，再点击“授权”。"
+                showAccessError = true
+                return
+            }
+            let selected = url.standardizedFileURL.resolvingSymlinksInPath()
+            let expected = docURL.standardizedFileURL.resolvingSymlinksInPath()
+            // 允许选择 Documents 本身或其上级目录（例如 QQ 的 Data 目录），上级目录同样覆盖 NapCat 所需路径
+            guard selected.path == expected.path || expected.path.hasPrefix(selected.path + "/") else {
+                accessErrorMessage = "请选择 \(expected.path)\n当前选择：\(selected.path)"
+                showAccessError = true
+                return
+            }
+            updateAll()
+        }
+    }
+
     private func updateAll() {
         updateQQVersion()
         updatePatchStatus()
@@ -194,6 +242,8 @@ private struct NapcatVersionView: View {
             Text(Image(systemName: "arrow.up.circle")).foregroundColor(.blue) + Text(" \(l)，可升级\(r)")
         case .latest(let v):
             Text(Image(systemName: "checkmark.circle")).foregroundColor(.green) + Text(" \(v)，已是最新")
+        case .unauthorized(let d):
+            (Text(Image(systemName: "lock.circle")).foregroundColor(.yellow) + Text(" 需要授权访问 QQ 数据目录")).help(d)
         case .failed(let d):
             (Text(Image(systemName: "xmark.circle")).foregroundColor(.red) + Text(" 发生错误")).help(d)
         }
@@ -233,7 +283,7 @@ private struct NapcatInstallationButton: View {
     var body: some View {
         Group {
             switch version {
-            case .loading, .failed:
+            case .loading, .unauthorized, .failed:
                 Button {
                     fatalError("Should not be reachable")
                 } label: {
@@ -391,9 +441,6 @@ private struct NapcatPatchView: View {
                 }
                 refreshHandler()
             }
-            Text("注意：需要在“系统设置-隐私与安全性-App管理”中添加该程序！")
-                .font(.caption)
-                .foregroundColor(.secondary)
         }
         .alert("发生错误", isPresented: $failed, presenting: error) { _ in
             Button("好") { failed = false }
@@ -408,11 +455,9 @@ struct NapcatUsageView: View {
     @State private var instances: [QQInstance] = []
     @State private var loaderStatus = LoaderStatus.current
     @State private var launcher: Result<OriginalLauncher, LauncherCheckError>?
-    @State private var pendingHotUpdates = 0
     @State private var message: String? = nil
     @State private var messageIsError = false
     @State private var showNapcatConfirm = false
-    @State private var showLoaderConfirm = false
     @State private var stopCandidate: QQInstance?
     @State private var originalLaunchDeadline: Date?
     @State private var stopping = false
@@ -448,7 +493,6 @@ struct NapcatUsageView: View {
                     }
                 }
             }
-            launcherStatus
             if let message {
                 Text(message)
                     .font(.caption)
@@ -471,15 +515,6 @@ struct NapcatUsageView: View {
             }
         } message: {
             Text(napcatCommand)
-        }
-        .alert("更新加载器", isPresented: $showLoaderConfirm) {
-            Button("备份并替换") {
-                updateLoader()
-            }
-            Button("取消", role: .cancel) {
-            }
-        } message: {
-            Text("当前 loadNapCat.js 为自定义内容，将先备份到同目录的 loadNapCat.js.bak-<时间>，再替换为支持双开的加载器。已运行的 QQ 不受影响。")
         }
         .alert("确认停止", isPresented: Binding(get: { stopCandidate != nil }, set: { if !$0 { stopCandidate = nil } }),
                presenting: stopCandidate) { instance in
@@ -523,43 +558,6 @@ struct NapcatUsageView: View {
         }
     }
 
-    @ViewBuilder
-    private var launcherStatus: some View {
-        VStack(spacing: 4) {
-            switch loaderStatus {
-            case .current:
-                EmptyView()
-            case .legacy, .missing:
-                HStack {
-                    Text(Image(systemName: "exclamationmark.triangle")).foregroundColor(.yellow)
-                        + Text(loaderStatus == .legacy ? " 加载器为旧版，原版 QQ 会无窗口" : " 未找到 loadNapCat.js")
-                    Button("更新加载器") { updateLoader() }
-                }
-            case .custom:
-                HStack {
-                    Text(Image(systemName: "questionmark.circle")).foregroundColor(.yellow) + Text(" 加载器为自定义内容")
-                    Button("替换为双开加载器") { showLoaderConfirm = true }
-                }
-            }
-            switch launcher {
-            case .success(let l):
-                Text("原版启动器：\(l.hotUpdateVersion.map { "热更新 \($0)" } ?? "QQ.app 自带")，Electron \(l.electronVersion)")
-                    .foregroundColor(.secondary)
-            case .failure(let e):
-                (Text(Image(systemName: "xmark.circle")).foregroundColor(.red) + Text(" \(e.localizedDescription)"))
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            case nil:
-                EmptyView()
-            }
-            if pendingHotUpdates > 0 {
-                Text("检测到 \(pendingHotUpdates) 个 QQ 热更新包尚未指向 NapCat，启动 NapCat 时会自动同步")
-                    .foregroundColor(.secondary)
-            }
-        }
-        .font(.caption)
-    }
-
     private var napcatCommand: String {
         "'\(qqExecutablePath)' \(napcatFlag)"
     }
@@ -571,9 +569,12 @@ struct NapcatUsageView: View {
 
     private func refresh() {
         instances = controller.instances()
+        // 原版 QQ 已被检测到，说明启动成功，解除启动冷却，避免关闭 QQ 后按钮仍处于禁用状态
+        if instances.contains(where: { $0.role == .original }) {
+            originalLaunchDeadline = nil
+        }
         loaderStatus = controller.loaderStatus()
         launcher = controller.launcher()
-        pendingHotUpdates = controller.pendingHotUpdates()
     }
 
     private func checkExecutable() -> Bool {
@@ -595,7 +596,6 @@ struct NapcatUsageView: View {
         showNapcatConfirm = true
     }
 
-    /// QQ 热更新生成新的 QQUpdate.app 后，其入口需重新指向 loadNapCat.js，否则 NapCat 不会加载
     private func syncHotUpdateEntries() -> Bool {
         do {
             let patched = try controller.syncHotUpdates()
@@ -619,11 +619,24 @@ struct NapcatUsageView: View {
             show("NapCat 已在运行（PID \(running.pid)），不重复启动")
             return
         }
-        guard syncHotUpdateEntries() else { return }
+        guard ensureLoader(), syncHotUpdateEntries() else { return }
         do {
             try controller.startNapcat()
         } catch {
             show("启动失败: \(error.localizedDescription)", error: true)
+        }
+    }
+
+    /// 加载器缺失或为旧版时自动生成默认的 loadNapCat.js；自定义内容保持不动。
+    private func ensureLoader() -> Bool {
+        guard loaderStatus == .missing || loaderStatus == .outdated else { return true }
+        do {
+            _ = try controller.updateLoader()
+            refresh()
+            return true
+        } catch {
+            show("无法生成 loadNapCat.js：\(error.localizedDescription)", error: true)
+            return false
         }
     }
 
@@ -652,16 +665,7 @@ struct NapcatUsageView: View {
             }
             return
         }
-        switch loaderStatus {
-        case .legacy:
-            show("当前 loadNapCat.js 为旧版，QQ 热更新后原版 QQ 会无窗口。请先点击「更新加载器」。", error: true)
-            return
-        case .missing:
-            show("未找到 loadNapCat.js，请先点击「更新加载器」。", error: true)
-            return
-        case .current, .custom:
-            break
-        }
+        guard ensureLoader() else { return }
         if case .failure(let error) = launcher {
             show("无法启动原版 QQ：\(error.localizedDescription)。请重新打开一次原版 QQ 让其完成更新，或重新安装 QQ。", error: true)
             return
@@ -673,16 +677,6 @@ struct NapcatUsageView: View {
         } catch {
             show("启动失败: \(error.localizedDescription)", error: true)
         }
-    }
-
-    private func updateLoader() {
-        do {
-            let backup = try controller.updateLoader()
-            show(backup.map { "加载器已更新，原文件已备份到 \($0.lastPathComponent)" } ?? "加载器已更新")
-        } catch {
-            show("更新加载器失败：\(error.localizedDescription)", error: true)
-        }
-        refresh()
     }
 
     private func confirmStop(_ instance: QQInstance) {

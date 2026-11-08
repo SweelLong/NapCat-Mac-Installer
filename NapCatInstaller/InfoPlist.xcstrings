@@ -18,6 +18,23 @@
         }
       }
     },
+    "NSAppDataUsageDescription" : {
+      "comment" : "Explain why the app needs access to QQ's sandbox container",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NapCat Installer needs access to QQ's data folder to read and install NapCat."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NapCat 安装器需要访问 QQ 的数据目录，以读取和安装 NapCat。"
+          }
+        }
+      }
+    },
     "NSHumanReadableCopyright" : {
       "comment" : "Copyright (human-readable)",
       "localizations" : {

@@ -4,6 +4,7 @@
 <dict>
 	<key>LSHasLocalizedDisplayName</key>
 	<true/>
-
+	<key>NSAppDataUsageDescription</key>
+	<string>NapCat 安装器需要访问 QQ 的数据目录，以读取和安装 NapCat。</string>
 </dict>
 </plist>

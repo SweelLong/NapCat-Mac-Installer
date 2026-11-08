@@ -2,9 +2,6 @@ import AppKit
 import CoreGraphics
 import Darwin
 
-// NapCat 与原版 QQ 双开：两者都是 /Applications/QQ.app 的主程序，只以 loadNapCat.js 判断模式所用的
-// --no-sandbox 启动参数区分。TIM 等其他程序可执行路径不同，不会被识别为 QQ 实例。
-
 let qqAppBundleURL = URL(fileURLWithPath: "/Applications/QQ.app")
 let qqExecutablePath = qqAppBundleURL.appendingPathComponent("Contents/MacOS/QQ").path
 let napcatFlag = "--no-sandbox"
@@ -23,7 +20,6 @@ enum QQWindowState: Equatable {
 struct QQInstance: Identifiable, Equatable {
     let pid: pid_t
     let role: QQRole
-    /// 进程启动时间（微秒），与 PID 一起作为身份，防止 PID 被复用后误操作其他进程
     let startTime: UInt64
     var windowState: QQWindowState = .none
     var id: pid_t { pid }
@@ -51,7 +47,6 @@ private func startTime(of pid: pid_t) -> UInt64? {
     return info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
 }
 
-/// 读取进程启动参数（KERN_PROCARGS2：argc + 可执行路径 + argv）
 func processArguments(of pid: pid_t) -> [String]? {
     var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
     var size = 0
@@ -80,7 +75,6 @@ private func inspect(pid: pid_t) -> QQInstance? {
     return QQInstance(pid: pid, role: args.dropFirst().contains(napcatFlag) ? .napcat : .original, startTime: started)
 }
 
-/// 统计各进程的窗口。只需窗口归属与尺寸，不需要屏幕录制权限。忽略菜单栏等小窗口。
 private func windowStates() -> [pid_t: QQWindowState] {
     guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return [:] }
     var states: [pid_t: QQWindowState] = [:]
@@ -100,7 +94,6 @@ private func windowStates() -> [pid_t: QQWindowState] {
     return states
 }
 
-/// 当前所有 QQ 主进程（不含 QQ Helper 子进程），状态来自实际进程与窗口检查
 func listQQInstances() -> [QQInstance] {
     let instances = allPIDs().compactMap(inspect(pid:))
     guard !instances.isEmpty else { return [] }
@@ -112,13 +105,10 @@ func listQQInstances() -> [QQInstance] {
     }.sorted { $0.startTime < $1.startTime }
 }
 
-/// 重新核实 PID 仍是同一个进程（同一可执行文件、同一启动时间、同一模式）
 func isSameProcess(_ instance: QQInstance) -> Bool {
     guard let current = inspect(pid: instance.pid) else { return false }
     return current.startTime == instance.startTime && current.role == instance.role
 }
-
-// MARK: - 原版启动器预检
 
 struct OriginalLauncher: Equatable {
     let appDir: URL
@@ -129,7 +119,6 @@ struct OriginalLauncher: Equatable {
 enum LauncherCheckError: LocalizedError, Equatable {
     case frameworkUnreadable(String)
     case incomplete(String)
-
     var errorDescription: String? {
         switch self {
         case .frameworkUnreadable(let path):
@@ -140,7 +129,6 @@ enum LauncherCheckError: LocalizedError, Equatable {
     }
 }
 
-/// appDir 为 <bundle>.app/Contents/Resources/app，对应的 Electron 运行时在 <bundle>.app/Contents/Frameworks
 private func frameworkURL(appDir: URL) -> URL {
     appDir.appendingPathComponent("../../Frameworks/QQNT.framework").standardizedFileURL
 }
@@ -151,9 +139,6 @@ func frameworkVersion(appDir: URL) -> String? {
     return plist["CFBundleVersion"] as? String
 }
 
-/// 与 loadNapCat.js 相同的选择规则：QQ 原生启动程序在 versions/<curVersion>/QQUpdate.app 存在时使用其中的
-/// QQNT.framework，否则使用 QQ.app 自带的；原版分支加载 framework 版本与之相同的那个包里的 app_launcher。
-/// 加载器以实际运行的 Electron 版本为准，这里只做启动前的检查与提示。
 func resolveOriginalLauncher(
     baseAppDir: URL = appURL, versionsDir: URL = versionsURL
 ) -> Result<OriginalLauncher, LauncherCheckError> {
@@ -182,9 +167,6 @@ func resolveOriginalLauncher(
     return .success(OriginalLauncher(appDir: appDir, electronVersion: electron, hotUpdateVersion: hotVersion))
 }
 
-// MARK: - 启动、激活与停止
-
-/// 在新的终端窗口中以 NapCat 模式运行 QQ。总是新开窗口，避免把命令输入到前台标签页里正在运行的程序。
 func launchNapcatInTerminal() throws {
     let escapedPath = qqExecutablePath.replacingOccurrences(of: "'", with: "'\\''")
     let script = """
@@ -199,7 +181,6 @@ func launchNapcatInTerminal() throws {
     try process.run()
 }
 
-/// 以新实例启动原版 QQ（等同 open -n，不带 --no-sandbox），不影响已运行的 NapCat
 func launchOriginalQQ() throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -212,7 +193,6 @@ func launchOriginalQQ() throws {
     }
 }
 
-/// 激活指定实例；没有可见窗口时向该 PID 发送「重新打开」事件，相当于点击它的 Dock 图标
 func activate(_ instance: QQInstance) {
     guard isSameProcess(instance), let app = NSRunningApplication(processIdentifier: instance.pid) else { return }
     app.unhide()
@@ -234,7 +214,6 @@ enum StopResult: Equatable {
     case stillRunning
 }
 
-/// 只停止这一个已核实的实例：先请求正常退出，超时后发送 SIGTERM，不使用 SIGKILL。会阻塞，请在后台调用。
 func stop(_ instance: QQInstance, timeout: TimeInterval = 10) -> StopResult {
     guard isSameProcess(instance) else { return .identityChanged }
     func waitForExit(_ seconds: TimeInterval) -> Bool {
@@ -253,15 +232,11 @@ func stop(_ instance: QQInstance, timeout: TimeInterval = 10) -> StopResult {
     return waitForExit(5) ? .stopped : .stillRunning
 }
 
-// MARK: - 启动管理界面依赖的系统操作
-
-/// 启动管理界面通过它读取状态和执行操作，测试时可替换为不接触真实进程的实现
 struct QQController {
     var qqInstalled: () -> Bool = { FileManager.default.isExecutableFile(atPath: qqExecutablePath) }
     var instances: () -> [QQInstance] = listQQInstances
     var loaderStatus: () -> LoaderStatus = getLoaderStatus
     var launcher: () -> Result<OriginalLauncher, LauncherCheckError> = { resolveOriginalLauncher() }
-    var pendingHotUpdates: () -> Int = pendingHotUpdatePackages
     var syncHotUpdates: () throws -> Int = patchHotUpdatePackages
     var updateLoader: () throws -> URL? = { try installLoader() }
     var startNapcat: () throws -> Void = launchNapcatInTerminal
@@ -272,6 +247,5 @@ struct QQController {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
-
     static let live = QQController()
 }
