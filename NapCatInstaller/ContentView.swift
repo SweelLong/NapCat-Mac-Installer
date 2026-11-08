@@ -201,7 +201,7 @@ struct ContentView: View {
             switch loader {
             case let l where PatchStatus.originalLoaders.contains(l):
                 patchStatus = .original
-            case napcatLoader:
+            case let l where l.hasSuffix("/loadNapCat.js"):
                 patchStatus = .napcat
             default:
                 patchStatus = .custom(loader)
@@ -633,6 +633,10 @@ struct NapcatUsageView: View {
         do {
             _ = try controller.updateLoader()
             refresh()
+            if loaderStatus == .missing || loaderStatus == .outdated {
+                show("未写入 loadNapCat.js：需要管理员权限", error: true)
+                return false
+            }
             return true
         } catch {
             show("无法生成 loadNapCat.js：\(error.localizedDescription)", error: true)
@@ -714,7 +718,7 @@ private struct NapcatPathsView: View {
             }
             PathRow(title: "QQ 入口配置", path: "/Applications/QQ.app/Contents/Resources/app/package.json", isDirectory: false)
             PathRow(title: "QQ 热更新包", path: "\(NSHomeDirectory())/Library/Containers/com.tencent.qq/Data/Library/Application Support/QQ/versions", isDirectory: true)
-            PathRow(title: "NapCat 加载器", path: "\(NSHomeDirectory())/Library/Containers/com.tencent.qq/Data/Documents/loadNapCat.js", isDirectory: false)
+            PathRow(title: "NapCat 加载器", path: "/Applications/QQ.app/Contents/Resources/app/loadNapCat.js", isDirectory: false)
             PathRow(title: "NapCat 安装位置", path: "\(NSHomeDirectory())/Library/Containers/com.tencent.qq/Data/Documents/napcat", isDirectory: true)
             PathRow(title: "NapCat 数据存储", path: "\(NSHomeDirectory())/Library/Containers/com.tencent.qq/Data/Library/Application Support/QQ/NapCat", isDirectory: true)
             PathRow(title: "NapCat 配置目录", path: "\(NSHomeDirectory())/Library/Containers/com.tencent.qq/Data/.config/QQ/NapCat", isDirectory: true)

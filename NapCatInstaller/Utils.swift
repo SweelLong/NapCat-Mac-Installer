@@ -107,6 +107,7 @@ func getRemoteNapcat(proxy: GitHubProxy? = nil) async throws -> String {
 }
 
 func removeNapcat() throws {
+    try? FileManager.default.removeItem(at: legacyLoaderURL)
     try? FileManager.default.removeItem(at: loaderURL)
     try? FileManager.default.removeItem(at: napcatURL)
 }
@@ -232,7 +233,7 @@ enum PatchStatus: Equatable {
     ]
 }
 
-let napcatLoader = "../../../../..\(docURL.path)/loadNapCat.js"
+let napcatLoader = "./loadNapCat.js"
 
 func getAppLoader() throws -> String? {
     guard FileManager.default.fileExists(atPath: packageURL.path) else { return nil }
@@ -242,23 +243,34 @@ func getAppLoader() throws -> String? {
     return dict["main"] as? String
 }
 
-let loaderURL = docURL.appendingPathComponent("loadNapCat.js")
+/// 加载器必须放在 QQ 包内：QQ 的沙盒子进程（如 QQEXDOC，独立容器 com.tencent.qqexdoc）
+/// 会读取基础包的 package.json 并加载 main，但无权进入 com.tencent.qq 的容器。
+let loaderURL = appURL.appendingPathComponent("loadNapCat.js")
+/// 旧版加载器位置，仅用于迁移和清理。
+let legacyLoaderURL = docURL.appendingPathComponent("loadNapCat.js")
+
+private func jsStringLiteral(_ value: String) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: [value], options: []),
+        let json = String(data: data, encoding: .utf8)
+    else { return "\"\"" }
+    return String(json.dropFirst().dropLast())
+}
 
 let loaderContent = #"""
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const fs = require('node:fs');
 const loadNapcat = process.argv.includes('--no-sandbox');
-const package = require('/Applications/QQ.app/Contents/Resources/app/package.json');
+const package = require(path.join(__dirname, 'package.json'));
+const napcatEntry = \#(jsStringLiteral(docURL.appendingPathComponent("napcat/napcat.mjs").path));
+const baseAppDir = \#(jsStringLiteral(appURL.path));
 if (loadNapcat) {
     (async () => {
-        await import(pathToFileURL(path.join(__dirname, 'napcat/napcat.mjs')).href);
+        await import(pathToFileURL(napcatEntry).href);
     })();
 } else {
-    // 原版 QQ：热更新生效时运行时来自 versions/<curVersion>/QQUpdate.app，必须加载同一包内的启动器，
-    // 不能用基础包 QQ.app 里为旧 Electron 构建的 app_launcher。按 QQNT.framework 版本与当前运行时匹配选择。
-    const fs = require('node:fs');
-    const baseAppDir = '\#(appURL.path)';
-    const versionsDir = path.resolve(__dirname, '../Library/Application Support/QQ/versions');
+    // 加载器与 package.json 同目录：__dirname 就是当前运行包的 app 目录（基础包或热更新包）。
+    // 按 QQNT.framework 版本与当前运行时匹配，避免用错包内为其他 Electron 构建的 app_launcher。
     const frameworkVersion = (appDir) => {
         try {
             const plist = fs.readFileSync(path.resolve(appDir, '../../Frameworks/QQNT.framework/Resources/Info.plist'), 'utf8');
@@ -268,13 +280,8 @@ if (loadNapcat) {
             return null;
         }
     };
-    const candidates = [];
-    const configPath = path.join(versionsDir, 'config.json');
-    if (fs.existsSync(configPath)) {
-        const { curVersion } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (curVersion) candidates.push(path.join(versionsDir, curVersion, 'QQUpdate.app/Contents/Resources/app'));
-    }
-    candidates.push(baseAppDir);
+    const candidates = [__dirname];
+    if (baseAppDir !== __dirname) candidates.push(baseAppDir);
     const runtime = process.versions.electron;
     const launcherAppDir = candidates.find((dir) => frameworkVersion(dir) === runtime);
     if (!launcherAppDir) {
@@ -306,42 +313,103 @@ enum LoaderStatus: Equatable {
 }
 
 func getLoaderStatus() -> LoaderStatus {
-    guard let content = try? String(contentsOf: loaderURL, encoding: .utf8) else { return .missing }
-    if content == loaderContent { return .current }
-    // 旧版加载器固定加载基础包 app_launcher，QQ 热更新后会无窗口；识别后自动替换为默认加载器。
-    if content.contains("app_launcher/index.js") && !content.contains("QQNT.framework") {
-        return .outdated
+    if let content = try? String(contentsOf: loaderURL, encoding: .utf8) {
+        if content == loaderContent { return .current }
+        // 旧版加载器固定加载基础包 app_launcher，QQ 热更新后会无窗口；识别后自动替换为默认加载器。
+        if content.contains("[loadNapCat]") || content.contains("baseAppDir")
+            || (content.contains("app_launcher/index.js") && !content.contains("QQNT.framework")) {
+            return .outdated
+        }
+        return .custom
     }
-    return .custom
+    // 兼容旧版放在 QQ 数据目录的加载器，首次切换入口时迁移到 QQ 包内。
+    if let content = try? String(contentsOf: legacyLoaderURL, encoding: .utf8) {
+        if content.contains("[loadNapCat]") || content.contains("baseAppDir")
+            || (content.contains("app_launcher/index.js") && !content.contains("QQNT.framework")) {
+            return .outdated
+        }
+        return .custom
+    }
+    return .missing
 }
 
-/// 写入双开加载器。已是当前版本时不改动；内容为自定义时先备份到 loadNapCat.js.bak-<时间>，返回备份位置。
+func promptForAdminPassword(_ message: String) -> String? {
+    let alert = NSAlert()
+    alert.messageText = "需要管理员权限"
+    alert.informativeText = message
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "确定")
+    alert.addButton(withTitle: "取消")
+    let textField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+    textField.placeholderString = "密码"
+    alert.accessoryView = textField
+    guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+    let password = textField.stringValue
+    return password.isEmpty ? nil : password
+}
+
 @discardableResult
-func installLoader() throws -> URL? {
+private func runSudo(_ arguments: [String], password: String) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+    process.arguments = ["-S"] + arguments
+    let inputPipe = Pipe()
+    inputPipe.fileHandleForWriting.write((password + "\n").data(using: .utf8)!)
+    inputPipe.fileHandleForWriting.closeFile()
+    process.standardInput = inputPipe
+    let outputPipe = Pipe()
+    let errorPipe = Pipe()
+    process.standardOutput = outputPipe
+    process.standardError = errorPipe
+    try process.run()
+    process.waitUntilExit()
+    let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    guard process.terminationStatus == 0 else {
+        let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? output
+        throw NSError(domain: "Loader", code: Int(process.terminationStatus),
+                      userInfo: [NSLocalizedDescriptionKey: permissionFixHint(for: error.isEmpty ? output : error)])
+    }
+    return output
+}
+
+/// 写入双开加载器。加载器位于 QQ 包内（需要管理员权限），QQEXDOC 等子进程才能读取。
+/// 已是当前版本时不改动；内容为自定义时先备份到数据目录，再原样迁移。
+@discardableResult
+func installLoader(password: String? = nil) throws -> URL? {
     let status = getLoaderStatus()
     guard status != .current else { return nil }
+    guard let adminPassword = password ?? promptForAdminPassword("请输入您的电脑开机密码（用于写入 QQ 目录中的 NapCat 加载器）：")
+    else { return nil }
+
     var backupURL: URL?
-    if status == .custom {
+    let content: String
+    switch status {
+    case .custom:
+        let source = FileManager.default.fileExists(atPath: loaderURL.path) ? loaderURL : legacyLoaderURL
+        guard let existing = try? String(contentsOf: source, encoding: .utf8) else {
+            throw NSError(domain: "Loader", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "无法读取自定义加载器：\(source.path)"])
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let url = docURL.appendingPathComponent("loadNapCat.js.bak-\(formatter.string(from: Date()))")
-        try FileManager.default.copyItem(at: loaderURL, to: url)
+        try FileManager.default.copyItem(at: source, to: url)
         backupURL = url
+        content = existing
+    default:
+        content = loaderContent
     }
-    try loaderContent.write(to: loaderURL, atomically: true, encoding: .utf8)
-    return backupURL
-}
 
-private func relativePath(from sourceDir: URL, to targetFile: URL) -> String {
-    let src = sourceDir.pathComponents
-    let dst = targetFile.pathComponents
-    var i = 0
-    while i < src.count && i < dst.count && src[i] == dst[i] {
-        i += 1
+    if let existing = try? String(contentsOf: loaderURL, encoding: .utf8), existing == content {
+        return backupURL
     }
-    var parts = Array(repeating: "..", count: src.count - i)
-    parts.append(contentsOf: dst[i...])
-    return parts.joined(separator: "/")
+
+    let tempURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("loadNapCat-\(UUID().uuidString).js")
+    try content.write(to: tempURL, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: tempURL) }
+    try runSudo(["/bin/cp", tempURL.path, loaderURL.path], password: adminPassword)
+    return backupURL
 }
 
 private func originalLoader(for buildVersion: String?) -> String {
@@ -365,16 +433,18 @@ private func hotUpdatePackageURLs() -> [URL] {
     }
 }
 
-/// 将 QQ 热更新包的入口指向 loadNapCat.js，返回修改数量。
+/// 将 QQ 热更新包的入口指向同包内的 loadNapCat.js，返回修改数量。
 @discardableResult
 func patchHotUpdatePackages() throws -> Int {
     var patched = 0
     for pkgURL in hotUpdatePackageURLs() {
         guard var dict = try getJSONObject(url: pkgURL), let main = dict["main"] as? String else { continue }
         let appDir = pkgURL.deletingLastPathComponent()
-        let loaderPath = relativePath(from: appDir, to: loaderURL)
-        guard main != loaderPath else { continue }
-        dict["main"] = loaderPath
+        // 每个热更新包内放一份加载器：运行中的 QQ / QQEXDOC 读取自己的包，避免跨沙盒容器读取。
+        try loaderContent.write(to: appDir.appendingPathComponent("loadNapCat.js"),
+                                atomically: true, encoding: .utf8)
+        guard main != napcatLoader else { continue }
+        dict["main"] = napcatLoader
         let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .withoutEscapingSlashes])
         try data.write(to: pkgURL)
         patched += 1
@@ -390,12 +460,16 @@ func restoreHotUpdatePackages() throws -> Int {
             let main = dict["main"] as? String,
             main.contains("loadNapCat.js")
         else { continue }
+        let appDir = pkgURL.deletingLastPathComponent()
         let original = originalLoader(for: dict["buildVersion"] as? String)
-        guard main != original else { continue }
-        dict["main"] = original
-        let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .withoutEscapingSlashes])
-        try data.write(to: pkgURL)
-        restored += 1
+        if main != original {
+            dict["main"] = original
+            let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .withoutEscapingSlashes])
+            try data.write(to: pkgURL)
+            restored += 1
+        }
+        // 入口恢复后再删除包内加载器，避免 main 指向不存在的文件。
+        try? FileManager.default.removeItem(at: appDir.appendingPathComponent("loadNapCat.js"))
     }
     return restored
 }
@@ -477,6 +551,8 @@ func getQQPackageBak() -> Bool {
                 } catch {
                     info += "\n警告：QQ 热更新包入口恢复失败（\(error.localizedDescription)）"
                 }
+                _ = try? runSudo(["/bin/rm", "-f", loaderURL.path], password: password)
+                try? FileManager.default.removeItem(at: legacyLoaderURL)
                 let alert = NSAlert()
                 alert.messageText = "成功"
                 alert.informativeText = info
@@ -581,11 +657,9 @@ func setQQPackageBak() throws {
         }
         return
     }
-    // 已是双开加载器则不改动；自定义加载器保留不覆盖，需要时在启动管理中手动替换（会先备份）
+    // 加载器写入 QQ 包内（需要管理员权限）；自定义内容先备份再原样迁移。
     let keptCustomLoader = getLoaderStatus() == .custom
-    if !keptCustomLoader {
-        try installLoader()
-    }
+    try installLoader(password: password)
     guard var qq = try getJSONObject(url: packageURL) else { return }
     qq["main"] = napcatLoader
     let data = try JSONSerialization.data(withJSONObject: qq, options: [.prettyPrinted, .withoutEscapingSlashes])
@@ -623,16 +697,22 @@ func setQQPackageBak() throws {
     DispatchQueue.main.async {
         if writeProcess.terminationStatus == 0 {
             var info = "已备份原文件并直接写入修改后的 package.json"
+            var hotUpdateSyncFailed = false
             do {
                 let patched = try patchHotUpdatePackages()
                 if patched > 0 {
                     info += "，并已同步修改 \(patched) 个 QQ 热更新包入口"
                 }
             } catch {
+                hotUpdateSyncFailed = true
                 info += "\n警告：QQ 热更新包入口同步失败（\(error.localizedDescription)）"
             }
+            if !hotUpdateSyncFailed {
+                // 所有入口都已改写后才删除旧位置，避免中途失败导致 main 指向不存在的文件。
+                try? FileManager.default.removeItem(at: legacyLoaderURL)
+            }
             if keptCustomLoader {
-                info += "\n提示：检测到自定义的 loadNapCat.js，已保留未覆盖"
+                info += "\n提示：检测到自定义的 loadNapCat.js，已备份并迁移到 QQ 包内"
             }
             let alert = NSAlert()
             alert.messageText = "成功"

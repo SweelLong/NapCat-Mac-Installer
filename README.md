@@ -35,8 +35,8 @@ macOS 12+ 的 NapCat 安装和更新工具，支持 Intel / Apple Silicon。
 
 - 两个实例必须使用不同的 QQ 账号。
 - 两者共用 `~/Library/Containers/com.tencent.qq/Data`（包括 `global/nt_db/login.db` 和 mmkv 数据）。测试中没有发现冲突，但长时间同时运行的稳定性尚未充分验证。
-- `loadNapCat.js` 缺失或为旧版时，会在启动时自动生成；自定义内容不会被覆盖。
-- QQ 热更新生成新版本后，「启动 NapCat」会自动把新热更新包的入口指向 NapCat。
+- `loadNapCat.js` 放在 QQ 包内（`/Applications/QQ.app/Contents/Resources/app/`，写入需要管理员权限），这样 QQ 的沙盒子进程（如 QQEXDOC，独立容器 `com.tencent.qqexdoc`）也能读取；缺失或为旧版时会在启动时重新生成，自定义内容会先备份再迁移。
+- QQ 热更新生成新版本后，「启动 NapCat」会把加载器复制到新热更新包内，并改写该包的入口。
 
 ## 构建
 
